@@ -36,7 +36,9 @@ const float WHEEL_BASE = 0.21;  // ÖLÇÜP GÜNCELLE!
 
 // HIZ AYARI (%65)
 const int FORWARD_SPEED = 65;
-const int TURN_SPEED = 52;
+const int TURN_SPEED_LEFT = 180;   // Sol motorlar için daha yüksek
+const int TURN_SPEED_RIGHT = 150;  // Sağ motorlar normal
+const int TURN_SPEED = 150;
 
 // Enkoder sayaçları
 volatile long leftEncoderCount = 0;
@@ -193,16 +195,27 @@ void testDistance(float meters) {
 void testRotate(float deg) {
   Serial.println(F("\n>>> DONUS TEST <<<"));
   Serial.print(F("Hedef: ")); Serial.print(deg); Serial.println(F("deg"));
+  Serial.print(F("WHEEL_BASE: ")); Serial.print(WHEEL_BASE*1000, 1); Serial.println(F("mm"));
   delay(3000);
   
   resetOdom();
   float target = deg * PI / 180.0;
   
-  setLeftMotors(TURN_SPEED);
-  setRightMotors(-TURN_SPEED);
+  setLeftMotors(200);
+  setRightMotors(-150);
   
-  while (abs(robotTheta) < abs(target) * 0.95) {
+  unsigned long lastPrint = 0;
+  
+  // Hedefe ulaşana kadar dön
+  while (abs(robotTheta) < abs(target) * 0.98) {
     updateOdom();
+    
+    if (millis() - lastPrint > 300) {
+      Serial.print(F("Theta: ")); Serial.print(robotTheta*180/PI, 1);
+      Serial.print(F(" / ")); Serial.println(deg);
+      lastPrint = millis();
+    }
+    
     delay(10);
   }
   
@@ -210,7 +223,11 @@ void testRotate(float deg) {
   delay(500);
   updateOdom();
   
-  Serial.print(F("Olculen: ")); Serial.print(robotTheta*180/PI, 1); Serial.println(F("deg"));
+  Serial.println(F("\n=== SONUC ==="));
+  Serial.print(F("Hedef: ")); Serial.print(deg, 1); Serial.println(F(" deg"));
+  Serial.print(F("Hesaplanan: ")); Serial.print(robotTheta*180/PI, 1); Serial.println(F(" deg"));
+  Serial.print(F("Hata: ")); Serial.print((robotTheta*180/PI) - deg, 1); Serial.println(F(" deg"));
+  Serial.println(F("\nGercek aciyi ACIÖLCER ile olc!"));
 }
 
 void testSquare(float side) {
