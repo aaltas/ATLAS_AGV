@@ -1,0 +1,40 @@
+cat > .gitignore << 'EOF'
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+
+# ROS
+build/
+devel/
+install/
+log/
+*.bag
+*.db3
+
+# Arduino
+*.hex
+*.elf
+*.eep
+*.lss
+*.map
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.bak
+*.log
