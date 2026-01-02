@@ -1,9 +1,15 @@
 /**
- * ODOMETRY TEST - Kalibrasyon Tamamlandı
- * Atlas AGV - Test & Calibration Code
+ * Atlas AGV - Motor Controller
+ * ROS 2 Serial Communication
+ * 
+ * Serial Protocol:
+ * Arduino -> Jetson: ODO,x,y,theta,vl,vr,encL,encR
+ * Jetson -> Arduino: CMD,left_speed,right_speed
  */
 
-// Motor pinleri
+// ============================================
+// PIN DEFINITIONS
+// ============================================
 const int LEFT_ENA = 5;
 const int LEFT_IN1 = 4;
 const int LEFT_IN2 = 12;
@@ -18,43 +24,60 @@ const int RIGHT_IN3 = 8;
 const int RIGHT_IN4 = 13;
 const int RIGHT_ENB = 11;
 
-// Enkoder pinleri
 const int LEFT_ENCODER_A = A0;
 const int LEFT_ENCODER_B = A1;
 const int RIGHT_ENCODER_A = A2;
 const int RIGHT_ENCODER_B = A3;
 
-// KALİBRE EDİLMİŞ PARAMETRELER
+// ============================================
+// CALIBRATED PARAMETERS
+// ============================================
 const float COUNTS_PER_WHEEL_REV = 378.0;
 const float WHEEL_DIAMETER = 0.080;
 const float WHEEL_CIRCUMFERENCE = PI * WHEEL_DIAMETER;
 const float METERS_PER_COUNT = WHEEL_CIRCUMFERENCE / COUNTS_PER_WHEEL_REV;
 const float WHEEL_BASE = 0.21;
 
-// HIZ AYARI
-const int FORWARD_SPEED = 65;
-const int TURN_SPEED = 100;  // Artırıldı
-
-// Enkoder sayaçları
-volatile long leftEncoderCount = 0;
-volatile long rightEncoderCount = 0;
-volatile uint8_t prevLeftA = 0;
-volatile uint8_t prevRightA = 0;
-
-// Yön düzeltme
+// Direction corrections
 const int LEFT_ENCODER_DIR = -1;
 const int RIGHT_ENCODER_DIR = 1;
 const int LEFT_MOTOR_DIR = -1;
 const int RIGHT_MOTOR_DIR = -1;
 
-// Odometri
+// ============================================
+// GLOBAL VARIABLES
+// ============================================
+volatile long leftEncoderCount = 0;
+volatile long rightEncoderCount = 0;
+volatile uint8_t prevLeftA = 0;
+volatile uint8_t prevRightA = 0;
+
+long prevLeftCount = 0;
+long prevRightCount = 0;
+
+unsigned long prevTime = 0;
+const unsigned long UPDATE_INTERVAL = 50; // 20Hz
+
 float robotX = 0.0;
 float robotY = 0.0;
 float robotTheta = 0.0;
+float leftWheelVelocity = 0.0;
+float rightWheelVelocity = 0.0;
 
+int currentLeftSpeed = 0;
+int currentRightSpeed = 0;
+
+String inputString = "";
+boolean stringComplete = false;
+
+// ============================================
+// SETUP
+// ============================================
 void setup() {
   Serial.begin(115200);
+  while (!Serial);
   
+  // Motor pins
   pinMode(LEFT_ENA, OUTPUT);
   pinMode(LEFT_IN1, OUTPUT);
   pinMode(LEFT_IN2, OUTPUT);
@@ -68,11 +91,13 @@ void setup() {
   pinMode(RIGHT_IN4, OUTPUT);
   pinMode(RIGHT_ENB, OUTPUT);
   
+  // Encoder pins
   pinMode(LEFT_ENCODER_A, INPUT_PULLUP);
   pinMode(LEFT_ENCODER_B, INPUT_PULLUP);
   pinMode(RIGHT_ENCODER_A, INPUT_PULLUP);
   pinMode(RIGHT_ENCODER_B, INPUT_PULLUP);
   
+  // Pin Change Interrupt
   PCICR |= (1 << PCIE1);
   PCMSK1 |= (1 << PCINT8);
   PCMSK1 |= (1 << PCINT10);
@@ -82,249 +107,169 @@ void setup() {
   
   stopMotors();
   
-  Serial.println(F("\n=== ATLAS AGV - ODOMETRY TEST ==="));
-  Serial.print(F("Counts/rev: ")); Serial.println(COUNTS_PER_WHEEL_REV);
-  Serial.print(F("Wheel diameter: ")); Serial.print(WHEEL_DIAMETER*1000); Serial.println(F("mm"));
-  Serial.print(F("Wheel base: ")); Serial.print(WHEEL_BASE*1000); Serial.println(F("mm"));
-  Serial.print(F("m/count: ")); Serial.println(METERS_PER_COUNT, 6);
-  delay(2000);
+  Serial.println("READY");
+  prevTime = millis();
 }
 
+// ============================================
+// MAIN LOOP
+// ============================================
 void loop() {
-  Serial.println(F("\n--- MENU ---"));
-  Serial.println(F("1: 50cm forward"));
-  Serial.println(F("2: 1m forward"));
-  Serial.println(F("3: 90deg turn"));
-  Serial.println(F("4: Square (50cm)"));
-  Serial.println(F("5: Square (1m)"));
-  Serial.println(F("6: Show position"));
-  Serial.println(F("7: Encoder test"));
-  Serial.println(F("0: Reset"));
+  unsigned long currentTime = millis();
   
-  while (!Serial.available()) delay(100);
-  
-  char c = Serial.read();
-  while (Serial.available()) Serial.read();
-  
-  switch (c) {
-    case '0': resetOdom(); Serial.println(F("Reset!")); break;
-    case '1': testDistance(0.5); break;
-    case '2': testDistance(1.0); break;
-    case '3': testRotate(90.0); break;
-    case '4': testSquare(0.5); break;
-    case '5': testSquare(1.0); break;
-    case '6': printPos(); break;
-    case '7': testEncoderDir(); break;
-    default: Serial.println(F("?")); break;
-  }
-  delay(1000);
-}
-
-void testEncoderDir() {
-  Serial.println(F("\n>>> ENCODER TEST <<<"));
-  Serial.println(F("Turn wheels forward manually (10s)"));
-  
-  resetOdom();
-  unsigned long start = millis();
-  
-  while (millis() - start < 10000) {
-    Serial.print(F("L: ")); Serial.print(leftEncoderCount);
-    Serial.print(F(" R: ")); Serial.println(rightEncoderCount);
-    delay(500);
+  // Odometry update and publish at 20Hz
+  if (currentTime - prevTime >= UPDATE_INTERVAL) {
+    float deltaTime = (currentTime - prevTime) / 1000.0;
+    updateOdometry(deltaTime);
+    publishOdometry();
+    prevTime = currentTime;
   }
   
-  if (leftEncoderCount > 0 && rightEncoderCount > 0) {
-    Serial.println(F("OK!"));
-  } else {
-    Serial.println(F("ERROR!"));
+  // Handle serial commands
+  if (stringComplete) {
+    parseCommand(inputString);
+    inputString = "";
+    stringComplete = false;
   }
 }
 
-void testDistance(float meters) {
-  Serial.println(F("\n>>> DISTANCE TEST <<<"));
-  Serial.print(F("Target: ")); Serial.print(meters*100); Serial.println(F("cm"));
-  delay(3000);
-  
-  resetOdom();
-  long startL = leftEncoderCount;
-  long startR = rightEncoderCount;
-  long targetCounts = abs(meters / METERS_PER_COUNT);
-  
-  Serial.print(F("Target counts: ")); Serial.println(targetCounts);
-  Serial.println(F("GO!"));
-  
-  setLeftMotors(FORWARD_SPEED);
-  setRightMotors(FORWARD_SPEED);
-  
-  unsigned long lastPrint = 0;
-  while (true) {
-    updateOdom();
-    long avgCnt = (abs(leftEncoderCount - startL) + abs(rightEncoderCount - startR)) / 2;
+// ============================================
+// SERIAL EVENT
+// ============================================
+void serialEvent() {
+  while (Serial.available()) {
+    char inChar = (char)Serial.read();
+    inputString += inChar;
     
-    if (millis() - lastPrint > 500) {
-      Serial.print(avgCnt); Serial.print(F("/")); Serial.print(targetCounts);
-      Serial.print(F(" | ")); Serial.print(robotX*100, 1); Serial.println(F("cm"));
-      lastPrint = millis();
+    if (inChar == '\n') {
+      stringComplete = true;
     }
+  }
+}
+
+// ============================================
+// COMMAND PARSER
+// ============================================
+void parseCommand(String cmd) {
+  cmd.trim();
+  
+  if (cmd.startsWith("CMD,")) {
+    // CMD,left_speed,right_speed
+    int firstComma = cmd.indexOf(',');
+    int secondComma = cmd.indexOf(',', firstComma + 1);
     
-    if (avgCnt >= targetCounts) break;
-    delay(10);
+    if (secondComma > 0) {
+      int leftSpeed = cmd.substring(firstComma + 1, secondComma).toInt();
+      int rightSpeed = cmd.substring(secondComma + 1).toInt();
+      
+      setLeftMotors(leftSpeed);
+      setRightMotors(rightSpeed);
+    }
   }
-  
-  stopMotors();
-  delay(1000);
-  updateOdom();
-  
-  Serial.println(F("\n=== RESULT ==="));
-  Serial.print(F("Target: ")); Serial.print(meters*100, 1); Serial.println(F("cm"));
-  Serial.print(F("Measured: ")); Serial.print(robotX*100, 1); Serial.println(F("cm"));
-  Serial.print(F("EncL: ")); Serial.print(abs(leftEncoderCount-startL));
-  Serial.print(F(" EncR: ")); Serial.println(abs(rightEncoderCount-startR));
-  Serial.println(F("\nMeasure with tape!"));
+  else if (cmd == "STOP") {
+    stopMotors();
+  }
+  else if (cmd == "RESET") {
+    resetOdometry();
+  }
+  else if (cmd == "STATUS") {
+    Serial.print("STATUS,");
+    Serial.print(currentLeftSpeed);
+    Serial.print(",");
+    Serial.println(currentRightSpeed);
+  }
 }
 
-void testRotate(float deg) {
-  Serial.println(F("\n>>> ROTATION TEST <<<"));
-  Serial.print(F("Target: ")); Serial.print(deg); Serial.println(F("deg"));
-  delay(3000);
+// ============================================
+// ODOMETRY
+// ============================================
+void updateOdometry(float deltaTime) {
+  noInterrupts();
+  long leftCount = leftEncoderCount;
+  long rightCount = rightEncoderCount;
+  interrupts();
   
-  resetOdom();
-  float target = deg * PI / 180.0;
+  long leftDelta = leftCount - prevLeftCount;
+  long rightDelta = rightCount - prevRightCount;
   
-  setLeftMotors(TURN_SPEED);
-  setRightMotors(-TURN_SPEED);
+  float leftDistance = leftDelta * METERS_PER_COUNT;
+  float rightDistance = rightDelta * METERS_PER_COUNT;
   
-  while (abs(robotTheta) < abs(target) * 0.95) {
-    updateOdom();
-    delay(10);
+  float centerDistance = (leftDistance + rightDistance) / 2.0;
+  float deltaTheta = (rightDistance - leftDistance) / WHEEL_BASE;
+  
+  robotX += centerDistance * cos(robotTheta + deltaTheta / 2.0);
+  robotY += centerDistance * sin(robotTheta + deltaTheta / 2.0);
+  robotTheta += deltaTheta;
+  
+  // Normalize angle
+  while (robotTheta > PI) robotTheta -= 2 * PI;
+  while (robotTheta < -PI) robotTheta += 2 * PI;
+  
+  // Calculate velocities
+  if (deltaTime > 0) {
+    leftWheelVelocity = leftDistance / deltaTime;
+    rightWheelVelocity = rightDistance / deltaTime;
   }
   
-  stopMotors();
-  delay(500);
-  updateOdom();
-  
-  Serial.print(F("Measured: ")); Serial.print(robotTheta*180/PI, 1); Serial.println(F("deg"));
+  prevLeftCount = leftCount;
+  prevRightCount = rightCount;
 }
 
-void testSquare(float side) {
-  Serial.println(F("\n>>> SQUARE TEST <<<"));
-  Serial.print(F("Side: ")); Serial.print(side*100); Serial.println(F("cm"));
-  delay(5000);
-  
-  resetOdom();
-  
-  for (int i = 0; i < 4; i++) {
-    Serial.print(F("Side ")); Serial.println(i+1);
-    moveDistance(side);
-    delay(500);
-    rotateDegrees(90.0);
-    delay(500);
-  }
-  
-  Serial.println(F("\n=== COMPLETED ==="));
-  printPos();
-  
-  float err = sqrt(robotX*robotX + robotY*robotY);
-  Serial.print(F("Error: ")); Serial.print(err*100, 1); Serial.println(F("cm"));
+void publishOdometry() {
+  Serial.print("ODO,");
+  Serial.print(robotX, 4);
+  Serial.print(",");
+  Serial.print(robotY, 4);
+  Serial.print(",");
+  Serial.print(robotTheta, 4);
+  Serial.print(",");
+  Serial.print(leftWheelVelocity, 4);
+  Serial.print(",");
+  Serial.print(rightWheelVelocity, 4);
+  Serial.print(",");
+  Serial.print(leftEncoderCount);
+  Serial.print(",");
+  Serial.println(rightEncoderCount);
 }
 
-void moveDistance(float m) {
-  long start = (abs(leftEncoderCount) + abs(rightEncoderCount)) / 2;
-  long target = abs(m / METERS_PER_COUNT);
-  
-  setLeftMotors(FORWARD_SPEED);
-  setRightMotors(FORWARD_SPEED);
-  
-  while (true) {
-    updateOdom();
-    long curr = (abs(leftEncoderCount) + abs(rightEncoderCount)) / 2;
-    if (abs(curr - start) >= target) break;
-    delay(10);
-  }
-  
-  stopMotors();
-  delay(300);
-}
-
-void rotateDegrees(float deg) {
-  float start = robotTheta;
-  float target = deg * PI / 180.0;
-  
-  setLeftMotors(TURN_SPEED);
-  setRightMotors(-TURN_SPEED);
-  
-  while (abs(robotTheta - start) < abs(target) * 0.92) {
-    updateOdom();
-    delay(10);
-  }
-  
-  stopMotors();
-  delay(300);
-}
-
-void resetOdom() {
+void resetOdometry() {
   noInterrupts();
   leftEncoderCount = 0;
   rightEncoderCount = 0;
   interrupts();
+  
+  prevLeftCount = 0;
+  prevRightCount = 0;
   robotX = 0.0;
   robotY = 0.0;
   robotTheta = 0.0;
+  
+  Serial.println("ACK");
 }
 
-void printPos() {
-  Serial.println(F("\n--- POSITION ---"));
-  Serial.print(F("X: ")); Serial.print(robotX*100, 1); Serial.println(F("cm"));
-  Serial.print(F("Y: ")); Serial.print(robotY*100, 1); Serial.println(F("cm"));
-  Serial.print(F("Theta: ")); Serial.print(robotTheta*180/PI, 1); Serial.println(F("deg"));
-}
-
-void updateOdom() {
-  static long prevL = 0;
-  static long prevR = 0;
+// ============================================
+// MOTOR CONTROL
+// ============================================
+void setLeftMotors(int speed) {
+  speed = constrain(speed, -255, 255);
+  currentLeftSpeed = speed;
+  speed *= LEFT_MOTOR_DIR;
   
-  noInterrupts();
-  long cntL = leftEncoderCount;
-  long cntR = rightEncoderCount;
-  interrupts();
-  
-  long deltaL = cntL - prevL;
-  long deltaR = cntR - prevR;
-  
-  float distL = deltaL * METERS_PER_COUNT;
-  float distR = deltaR * METERS_PER_COUNT;
-  
-  float center = (distL + distR) / 2.0;
-  float dTheta = (distR - distL) / WHEEL_BASE;
-  
-  robotX += center * cos(robotTheta + dTheta / 2.0);
-  robotY += center * sin(robotTheta + dTheta / 2.0);
-  robotTheta += dTheta;
-  
-  while (robotTheta > PI) robotTheta -= 2*PI;
-  while (robotTheta < -PI) robotTheta += 2*PI;
-  
-  prevL = cntL;
-  prevR = cntR;
-}
-
-void setLeftMotors(int spd) {
-  spd = constrain(spd, -255, 255) * LEFT_MOTOR_DIR;
-  
-  if (spd > 0) {
+  if (speed > 0) {
     digitalWrite(LEFT_IN1, HIGH);
     digitalWrite(LEFT_IN2, LOW);
     digitalWrite(LEFT_IN3, HIGH);
     digitalWrite(LEFT_IN4, LOW);
-    analogWrite(LEFT_ENA, abs(spd));
-    analogWrite(LEFT_ENB, abs(spd));
-  } else if (spd < 0) {
+    analogWrite(LEFT_ENA, abs(speed));
+    analogWrite(LEFT_ENB, abs(speed));
+  } else if (speed < 0) {
     digitalWrite(LEFT_IN1, LOW);
     digitalWrite(LEFT_IN2, HIGH);
     digitalWrite(LEFT_IN3, LOW);
     digitalWrite(LEFT_IN4, HIGH);
-    analogWrite(LEFT_ENA, abs(spd));
-    analogWrite(LEFT_ENB, abs(spd));
+    analogWrite(LEFT_ENA, abs(speed));
+    analogWrite(LEFT_ENB, abs(speed));
   } else {
     digitalWrite(LEFT_IN1, LOW);
     digitalWrite(LEFT_IN2, LOW);
@@ -335,23 +280,25 @@ void setLeftMotors(int spd) {
   }
 }
 
-void setRightMotors(int spd) {
-  spd = constrain(spd, -255, 255) * RIGHT_MOTOR_DIR;
+void setRightMotors(int speed) {
+  speed = constrain(speed, -255, 255);
+  currentRightSpeed = speed;
+  speed *= RIGHT_MOTOR_DIR;
   
-  if (spd > 0) {
+  if (speed > 0) {
     digitalWrite(RIGHT_IN1, HIGH);
     digitalWrite(RIGHT_IN2, LOW);
     digitalWrite(RIGHT_IN3, HIGH);
     digitalWrite(RIGHT_IN4, LOW);
-    analogWrite(RIGHT_ENA, abs(spd));
-    analogWrite(RIGHT_ENB, abs(spd));
-  } else if (spd < 0) {
+    analogWrite(RIGHT_ENA, abs(speed));
+    analogWrite(RIGHT_ENB, abs(speed));
+  } else if (speed < 0) {
     digitalWrite(RIGHT_IN1, LOW);
     digitalWrite(RIGHT_IN2, HIGH);
     digitalWrite(RIGHT_IN3, LOW);
     digitalWrite(RIGHT_IN4, HIGH);
-    analogWrite(RIGHT_ENA, abs(spd));
-    analogWrite(RIGHT_ENB, abs(spd));
+    analogWrite(RIGHT_ENA, abs(speed));
+    analogWrite(RIGHT_ENB, abs(speed));
   } else {
     digitalWrite(RIGHT_IN1, LOW);
     digitalWrite(RIGHT_IN2, LOW);
@@ -367,6 +314,9 @@ void stopMotors() {
   setRightMotors(0);
 }
 
+// ============================================
+// ENCODER INTERRUPT
+// ============================================
 ISR(PCINT1_vect) {
   uint8_t currLA = digitalRead(LEFT_ENCODER_A);
   if (currLA != prevLeftA) {
