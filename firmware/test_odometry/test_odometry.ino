@@ -36,8 +36,8 @@ const float WHEEL_BASE = 0.21;  // ÖLÇÜP GÜNCELLE!
 
 // HIZ AYARI (%65)
 const int FORWARD_SPEED = 65;
-const int TURN_SPEED_LEFT = 180;   // Sol motorlar için daha yüksek
-const int TURN_SPEED_RIGHT = 150;  // Sağ motorlar normal
+const int TURN_SPEED_LEFT = 220;   // Sol motorlar için daha yüksek
+const int TURN_SPEED_RIGHT = -150;  // Sağ motorlar normal
 const int TURN_SPEED = 150;
 
 // Enkoder sayaçları
@@ -201,8 +201,9 @@ void testRotate(float deg) {
   resetOdom();
   float target = deg * PI / 180.0;
   
-  setLeftMotors(200);
-  setRightMotors(-150);
+  setLeftMotors(TURN_SPEED_LEFT);
+  setRightMotors(TURN_SPEED_RIGHT);
+
   
   unsigned long lastPrint = 0;
   
