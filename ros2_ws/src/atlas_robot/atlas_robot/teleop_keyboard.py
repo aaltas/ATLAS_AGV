@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Teleop Keyboard Node - Timeout based movement
-If no key pressed within timeout, robot stops
+Teleop Keyboard Node - Hold to Move with continuous publishing
 """
 
 import rclpy
@@ -10,7 +9,6 @@ from geometry_msgs.msg import Twist
 import sys
 import termios
 import tty
-import select
 import threading
 import time
 
@@ -18,20 +16,20 @@ INSTRUCTIONS = """
 ---------------------------
 Atlas Robot - Keyboard Control
 ---------------------------
-Hold keys to move (stops when released):
+HOLD keys to move (release to stop):
    w
  a s d
 
-w : Forward
-s : Backward
-a : Turn left
-d : Turn right
+w : Forward (hold to continue)
+s : Backward (hold to continue)
+a : Turn left (hold to continue)
+d : Turn right (hold to continue)
 
 q : Increase speed (+0.05)
 e : Decrease speed (-0.05)
+space/x : Emergency stop
 CTRL-C to quit
 ---------------------------
-Movement stops automatically if no key pressed for 0.2s
 """
 
 class TeleopKeyboard(Node):
@@ -40,41 +38,34 @@ class TeleopKeyboard(Node):
         
         self.pub = self.create_publisher(Twist, 'cmd_vel', 10)
         
-        self.speed = 0.3
+        self.speed = 0.3  # m/s
         self.linear_vel = 0.0
         self.angular_vel = 0.0
-        self.last_key_time = time.time()
-        self.timeout = 0.2  # Stop if no key for 200ms
         
         self.settings = termios.tcgetattr(sys.stdin)
         
-        # Publisher thread
+        # Publisher thread - 10Hz sürekli yayın
         self.running = True
         self.pub_thread = threading.Thread(target=self.publish_loop)
         self.pub_thread.daemon = True
         self.pub_thread.start()
         
         print(INSTRUCTIONS)
-        print(f"Speed: {self.speed:.2f} m/s | Hold keys to move...")
+        print(f"Speed: {self.speed:.2f} m/s | Press keys to move...")
     
     def publish_loop(self):
-        """Publish velocity at 20Hz and check timeout"""
+        """Publish velocity at 10Hz continuously"""
         while self.running and rclpy.ok():
-            # Check timeout - stop if no key pressed recently
-            if time.time() - self.last_key_time > self.timeout:
-                self.linear_vel = 0.0
-                self.angular_vel = 0.0
-            
             twist = Twist()
             twist.linear.x = self.linear_vel
             twist.angular.z = self.angular_vel
             self.pub.publish(twist)
-            
-            time.sleep(0.05)  # 20Hz
+            time.sleep(0.1)  # 10Hz
     
-    def get_key_nonblocking(self, timeout=0.01):
+    def get_key(self, timeout=0.05):
         """Non-blocking key read with timeout"""
         tty.setraw(sys.stdin.fileno())
+        import select
         rlist, _, _ = select.select([sys.stdin], [], [], timeout)
         if rlist:
             key = sys.stdin.read(1)
@@ -100,11 +91,18 @@ class TeleopKeyboard(Node):
     
     def run(self):
         try:
+            last_key_time = time.time()
+            
             while rclpy.ok():
-                key = self.get_key_nonblocking(timeout=0.05)
+                key = self.get_key(timeout=0.05)
+                
+                # Timeout check - 150ms boyunca tuş gelmezse dur
+                if time.time() - last_key_time > 0.15:
+                    self.linear_vel = 0.0
+                    self.angular_vel = 0.0
                 
                 if key:
-                    self.last_key_time = time.time()  # Update last key time
+                    last_key_time = time.time()
                     
                     if key == 'w':
                         self.linear_vel = self.speed

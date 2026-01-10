@@ -1,104 +1,109 @@
 /**
- * ODOMETRY TEST - DOĞRU KALİBRASYON
+ * ATLAS AGV - TEST ODOMETRY (2 Motor + 1 Caster Wheel)
+ * 
+ * Hardware: 2x DC Motor + Encoders + 1 Caster Wheel
+ * Yeni Pin Konfigürasyonu
  */
 
-// Motor pinleri
-const int LEFT_ENA = 5;
-const int LEFT_IN1 = 4;
-const int LEFT_IN2 = 12;
-const int LEFT_IN3 = 3;
-const int LEFT_IN4 = 2;
-const int LEFT_ENB = 6;
+// ============================================
+// PIN TANIMLARI
+// ============================================
+#define LEFT_PWM 10
+#define LEFT_IN1 8
+#define LEFT_IN2 9
+#define RIGHT_PWM 11
+#define RIGHT_IN1 12
+#define RIGHT_IN2 13
+#define LEFT_ENC_A A1
+#define LEFT_ENC_B A0
+#define RIGHT_ENC_A A2
+#define RIGHT_ENC_B A3
 
-const int RIGHT_ENA = 10;
-const int RIGHT_IN1 = 7;
-const int RIGHT_IN2 = 9;
-const int RIGHT_IN3 = 8;
-const int RIGHT_IN4 = 13;
-const int RIGHT_ENB = 11;
-
-// Enkoder pinleri
-const int LEFT_ENCODER_A = A0;
-const int LEFT_ENCODER_B = A1;
-const int RIGHT_ENCODER_A = A2;
-const int RIGHT_ENCODER_B = A3;
-
+// ============================================
 // KALİBRE EDİLMİŞ PARAMETRELER
-const float COUNTS_PER_WHEEL_REV = 378.0;  // Ölçülen gerçek değer
+// ============================================
+const float COUNTS_PER_WHEEL_REV = 435.0;  // Ölçülen gerçek değer
 
-// BAŞLANGIÇ - KALİBRASYON YOK
-const float NOMINAL_DIAMETER = 0.080;  // 80mm (ölçülen)
-const float EFFECTIVE_DIAMETER = 0.080;  // Başlangıç için aynı
-
-const float WHEEL_CIRCUMFERENCE = PI * EFFECTIVE_DIAMETER;
+// Tekerlek parametreleri
+const float WHEEL_DIAMETER = 0.080;  // 80mm (ölçülen)
+const float WHEEL_CIRCUMFERENCE = PI * WHEEL_DIAMETER;
 const float METERS_PER_COUNT = WHEEL_CIRCUMFERENCE / COUNTS_PER_WHEEL_REV;
-const float WHEEL_BASE = 0.21;  // ÖLÇÜP GÜNCELLE!
+const float WHEEL_BASE = 0.21*1;  // 210mm (motorlar arası mesafe)
 
-// HIZ AYARI (%65)
-const int FORWARD_SPEED = 65;
-const int TURN_SPEED_LEFT = 220;   // Sol motorlar için daha yüksek
-const int TURN_SPEED_RIGHT = -150;  // Sağ motorlar normal
-const int TURN_SPEED = 150;
+// Hız ayarları
+const int FORWARD_SPEED = 90;   // İleri hız (%25 PWM)
+const int TURN_SPEED = 90;     // Dönüş hızı
 
+// MOTOR KALİBRASYON FAKTÖRLERI (Düz gidiş için)
+// Sağa kayıyorsa: LEFT_SPEED_FACTOR'u artır
+// Sola kayıyorsa: RIGHT_SPEED_FACTOR'u artır
+const float LEFT_SPEED_FACTOR = 1.0;   // Sol motor çarpanı (0.8 - 1.2)
+const float RIGHT_SPEED_FACTOR = 1.07;  // Sağ motor çarpanı (0.8 - 1.2)
+
+// Enkoder ve motor yön düzeltmeleri
+const int LEFT_ENCODER_DIR = 1;
+const int RIGHT_ENCODER_DIR = 1;
+const int LEFT_MOTOR_DIR = -1;
+const int RIGHT_MOTOR_DIR = -1;
+
+// ============================================
+// GLOBAL DEĞİŞKENLER
+// ============================================
 // Enkoder sayaçları
 volatile long leftEncoderCount = 0;
 volatile long rightEncoderCount = 0;
 volatile uint8_t prevLeftA = 0;
 volatile uint8_t prevRightA = 0;
 
-// Yön düzeltme (sadece bu satırları değiştir)
-const int LEFT_ENCODER_DIR = -1;   // 1'den -1'e değişti
-const int RIGHT_ENCODER_DIR = 1;   // -1'den 1'e değişti
-const int LEFT_MOTOR_DIR = -1;     // aynı
-const int RIGHT_MOTOR_DIR = -1;    // aynı
-
-// Odometri
+// Odometri değişkenleri
 float robotX = 0.0;
 float robotY = 0.0;
 float robotTheta = 0.0;
 
+// ============================================
+// SETUP
+// ============================================
 void setup() {
   Serial.begin(115200);
   
-  // Motor pinleri
-  pinMode(LEFT_ENA, OUTPUT);
+  // Motor pinleri (OUTPUT)
+  pinMode(LEFT_PWM, OUTPUT);
   pinMode(LEFT_IN1, OUTPUT);
   pinMode(LEFT_IN2, OUTPUT);
-  pinMode(LEFT_IN3, OUTPUT);
-  pinMode(LEFT_IN4, OUTPUT);
-  pinMode(LEFT_ENB, OUTPUT);
-  pinMode(RIGHT_ENA, OUTPUT);
+  pinMode(RIGHT_PWM, OUTPUT);
   pinMode(RIGHT_IN1, OUTPUT);
   pinMode(RIGHT_IN2, OUTPUT);
-  pinMode(RIGHT_IN3, OUTPUT);
-  pinMode(RIGHT_IN4, OUTPUT);
-  pinMode(RIGHT_ENB, OUTPUT);
   
-  // Enkoder pinleri
-  pinMode(LEFT_ENCODER_A, INPUT_PULLUP);
-  pinMode(LEFT_ENCODER_B, INPUT_PULLUP);
-  pinMode(RIGHT_ENCODER_A, INPUT_PULLUP);
-  pinMode(RIGHT_ENCODER_B, INPUT_PULLUP);
+  // Enkoder pinleri (INPUT_PULLUP)
+  pinMode(LEFT_ENC_A, INPUT_PULLUP);
+  pinMode(LEFT_ENC_B, INPUT_PULLUP);
+  pinMode(RIGHT_ENC_A, INPUT_PULLUP);
+  pinMode(RIGHT_ENC_B, INPUT_PULLUP);
   
-  // Interrupt
-  PCICR |= (1 << PCIE1);
-  PCMSK1 |= (1 << PCINT8);
-  PCMSK1 |= (1 << PCINT10);
+  // Pin Change Interrupt ayarları
+  // A1 (PCINT9) ve A2 (PCINT10) için PCINT1 vektörü
+  PCICR |= (1 << PCIE1);      // PCINT1 grubunu etkinleştir
+  PCMSK1 |= (1 << PCINT9);    // A1 (LEFT_ENC_A)
+  PCMSK1 |= (1 << PCINT10);   // A2 (RIGHT_ENC_A)
   
-  prevLeftA = digitalRead(LEFT_ENCODER_A);
-  prevRightA = digitalRead(RIGHT_ENCODER_A);
+  prevLeftA = digitalRead(LEFT_ENC_A);
+  prevRightA = digitalRead(RIGHT_ENC_A);
   
   stopMotors();
   
-  Serial.println(F("\n=== ATLAS ODO TEST - DOĞRU KALIBRASYON ==="));
-  Serial.print(F("Counts/tur: ")); Serial.println(COUNTS_PER_WHEEL_REV);
-  Serial.print(F("Nominal cap: ")); Serial.print(NOMINAL_DIAMETER*1000); Serial.println(F("mm"));
-  Serial.print(F("Efektif cap: ")); Serial.print(EFFECTIVE_DIAMETER*1000, 1); Serial.println(F("mm"));
+  Serial.println(F("\n=== ATLAS AGV - TEST ODOMETRY (2 MOTOR) ==="));
+  Serial.print(F("Counts/rev: ")); Serial.println(COUNTS_PER_WHEEL_REV);
+  Serial.print(F("Wheel diameter: ")); Serial.print(WHEEL_DIAMETER*1000); Serial.println(F("mm"));
+  Serial.print(F("Wheel base: ")); Serial.print(WHEEL_BASE*1000); Serial.println(F("mm"));
   Serial.print(F("m/count: ")); Serial.println(METERS_PER_COUNT, 6);
-  Serial.print(F("Hiz: ")); Serial.print(FORWARD_SPEED); Serial.println(F("/255"));
+  Serial.print(F("Forward speed: ")); Serial.print(FORWARD_SPEED); Serial.println(F("/255"));
+  Serial.print(F("Turn speed: ")); Serial.print(TURN_SPEED); Serial.println(F("/255"));
   delay(2000);
 }
 
+// ============================================
+// MAIN LOOP
+// ============================================
 void loop() {
   Serial.println(F("\n--- MENU ---"));
   Serial.println(F("1: 50cm ileri"));
@@ -108,6 +113,7 @@ void loop() {
   Serial.println(F("5: Kare (1m)"));
   Serial.println(F("6: Pozisyon"));
   Serial.println(F("7: Enkoder test"));
+  Serial.println(F("8: Motor test"));
   Serial.println(F("0: Reset"));
   
   while (!Serial.available()) delay(100);
@@ -124,10 +130,15 @@ void loop() {
     case '5': testSquare(1.0); break;
     case '6': printPos(); break;
     case '7': testEncoderDir(); break;
+    case '8': testMotors(); break;
     default: Serial.println(F("?")); break;
   }
   delay(1000);
 }
+
+// ============================================
+// TEST FONKSİYONLARI
+// ============================================
 
 void testEncoderDir() {
   Serial.println(F("\n>>> ENKODER TEST <<<"));
@@ -143,10 +154,48 @@ void testEncoderDir() {
   }
   
   if (leftEncoderCount > 0 && rightEncoderCount > 0) {
-    Serial.println(F("OK!"));
+    Serial.println(F("OK! Her iki enkoder pozitif"));
   } else {
-    Serial.println(F("HATA!"));
+    Serial.println(F("HATA! Enkoder yonlerini kontrol et"));
+    Serial.print(F("LEFT_ENCODER_DIR = ")); Serial.println(leftEncoderCount > 0 ? "1 (OK)" : "-1 (Ters)");
+    Serial.print(F("RIGHT_ENCODER_DIR = ")); Serial.println(rightEncoderCount > 0 ? "1 (OK)" : "-1 (Ters)");
   }
+}
+
+void testMotors() {
+  Serial.println(F("\n>>> MOTOR TEST <<<"));
+  
+  Serial.println(F("Sol motor ileri - 3sn"));
+  setLeftMotor(150);
+  delay(3000);
+  setLeftMotor(0);
+  delay(1000);
+  
+  Serial.println(F("Sol motor geri - 3sn"));
+  setLeftMotor(-150);
+  delay(3000);
+  setLeftMotor(0);
+  delay(1000);
+  
+  Serial.println(F("Sag motor ileri - 3sn"));
+  setRightMotor(150);
+  delay(3000);
+  setRightMotor(0);
+  delay(1000);
+  
+  Serial.println(F("Sag motor geri - 3sn"));
+  setRightMotor(-150);
+  delay(3000);
+  setRightMotor(0);
+  delay(1000);
+  
+  Serial.println(F("Her iki motor ileri - 3sn"));
+  setLeftMotor(150);
+  setRightMotor(150);
+  delay(3000);
+  stopMotors();
+  
+  Serial.println(F("Test tamamlandi!"));
 }
 
 void testDistance(float meters) {
@@ -162,8 +211,8 @@ void testDistance(float meters) {
   Serial.print(F("Target counts: ")); Serial.println(targetCounts);
   Serial.println(F("GO!"));
   
-  setLeftMotors(FORWARD_SPEED);
-  setRightMotors(FORWARD_SPEED);
+  setLeftMotor(FORWARD_SPEED);
+  setRightMotor(FORWARD_SPEED);
   
   unsigned long lastPrint = 0;
   while (true) {
@@ -186,7 +235,7 @@ void testDistance(float meters) {
   
   Serial.println(F("\n=== SONUC ==="));
   Serial.print(F("Hedef: ")); Serial.print(meters*100, 1); Serial.println(F("cm"));
-  Serial.print(F("Hesap: ")); Serial.print(robotX*100, 1); Serial.println(F("cm"));
+  Serial.print(F("Hesaplanan: ")); Serial.print(robotX*100, 1); Serial.println(F("cm"));
   Serial.print(F("EncL: ")); Serial.print(abs(leftEncoderCount-startL));
   Serial.print(F(" EncR: ")); Serial.println(abs(rightEncoderCount-startR));
   Serial.println(F("\nMEZURA ile GERCEK mesafeyi olc!"));
@@ -198,22 +247,29 @@ void testRotate(float deg) {
   Serial.print(F("WHEEL_BASE: ")); Serial.print(WHEEL_BASE*1000, 1); Serial.println(F("mm"));
   delay(3000);
   
-  resetOdom();
+  resetOdom();  // ✅ Zaten var
+  
+  // ✅ ENKODER SAYAÇLARINI DA KAYDET
+  long startL = leftEncoderCount;
+  long startR = rightEncoderCount;
+  
   float target = deg * PI / 180.0;
   
-  setLeftMotors(TURN_SPEED_LEFT);
-  setRightMotors(TURN_SPEED_RIGHT);
-
+  setLeftMotor(TURN_SPEED);
+  setRightMotor(-TURN_SPEED);
   
   unsigned long lastPrint = 0;
+  unsigned long startTime = millis();
   
-  // Hedefe ulaşana kadar dön
-  while (abs(robotTheta) < abs(target) * 0.98) {
+  // ✅ TIMEOUT EKLE (güvenlik için)
+  while (abs(robotTheta) < abs(target) * 0.98 && millis() - startTime < 10000) {
     updateOdom();
     
     if (millis() - lastPrint > 300) {
       Serial.print(F("Theta: ")); Serial.print(robotTheta*180/PI, 1);
-      Serial.print(F(" / ")); Serial.println(deg);
+      Serial.print(F(" / ")); Serial.print(deg);
+      Serial.print(F(" | EncL: ")); Serial.print(abs(leftEncoderCount-startL));
+      Serial.print(F(" EncR: ")); Serial.println(abs(rightEncoderCount-startR));
       lastPrint = millis();
     }
     
@@ -227,8 +283,9 @@ void testRotate(float deg) {
   Serial.println(F("\n=== SONUC ==="));
   Serial.print(F("Hedef: ")); Serial.print(deg, 1); Serial.println(F(" deg"));
   Serial.print(F("Hesaplanan: ")); Serial.print(robotTheta*180/PI, 1); Serial.println(F(" deg"));
-  Serial.print(F("Hata: ")); Serial.print((robotTheta*180/PI) - deg, 1); Serial.println(F(" deg"));
-  Serial.println(F("\nGercek aciyi ACIÖLCER ile olc!"));
+  Serial.print(F("EncL: ")); Serial.print(abs(leftEncoderCount-startL));
+  Serial.print(F(" EncR: ")); Serial.println(abs(rightEncoderCount-startR));
+  Serial.println(F("\nACIOLCER ile GERCEK aciyi olc!"));
 }
 
 void testSquare(float side) {
@@ -250,15 +307,19 @@ void testSquare(float side) {
   printPos();
   
   float err = sqrt(robotX*robotX + robotY*robotY);
-  Serial.print(F("Hata: ")); Serial.print(err*100, 1); Serial.println(F("cm"));
+  Serial.print(F("Baslangic hata: ")); Serial.print(err*100, 1); Serial.println(F("cm"));
 }
+
+// ============================================
+// YARDIMCI FONKSİYONLAR
+// ============================================
 
 void moveDistance(float m) {
   long start = (abs(leftEncoderCount) + abs(rightEncoderCount)) / 2;
   long target = abs(m / METERS_PER_COUNT);
   
-  setLeftMotors(FORWARD_SPEED);
-  setRightMotors(FORWARD_SPEED);
+  setLeftMotor(FORWARD_SPEED);
+  setRightMotor(FORWARD_SPEED);
   
   while (true) {
     updateOdom();
@@ -275,8 +336,8 @@ void rotateDegrees(float deg) {
   float start = robotTheta;
   float target = deg * PI / 180.0;
   
-  setLeftMotors(TURN_SPEED);
-  setRightMotors(-TURN_SPEED);
+  setLeftMotor(TURN_SPEED);
+  setRightMotor(-TURN_SPEED);
   
   while (abs(robotTheta - start) < abs(target) * 0.92) {
     updateOdom();
@@ -298,7 +359,7 @@ void resetOdom() {
 }
 
 void printPos() {
-  Serial.println(F("\n--- POS ---"));
+  Serial.println(F("\n--- POZISYON ---"));
   Serial.print(F("X: ")); Serial.print(robotX*100, 1); Serial.println(F("cm"));
   Serial.print(F("Y: ")); Serial.print(robotY*100, 1); Serial.println(F("cm"));
   Serial.print(F("Theta: ")); Serial.print(robotTheta*180/PI, 1); Serial.println(F("deg"));
@@ -319,6 +380,7 @@ void updateOdom() {
   float distL = deltaL * METERS_PER_COUNT;
   float distR = deltaR * METERS_PER_COUNT;
   
+  // Differential drive kinematics
   float center = (distL + distR) / 2.0;
   float dTheta = (distR - distL) / WHEEL_BASE;
   
@@ -326,6 +388,7 @@ void updateOdom() {
   robotY += center * sin(robotTheta + dTheta / 2.0);
   robotTheta += dTheta;
   
+  // Normalize angle to -PI to +PI
   while (robotTheta > PI) robotTheta -= 2*PI;
   while (robotTheta < -PI) robotTheta += 2*PI;
   
@@ -333,76 +396,71 @@ void updateOdom() {
   prevR = cntR;
 }
 
-void setLeftMotors(int spd) {
-  spd = constrain(spd, -255, 255) * LEFT_MOTOR_DIR;
+// ============================================
+// MOTOR KONTROL FONKSİYONLARI
+// ============================================
+
+void setLeftMotor(int speed) {
+  // Kalibrasyon faktörü uygula
+  speed = (int)(speed * LEFT_SPEED_FACTOR);
+  speed = constrain(speed, -255, 255) * LEFT_MOTOR_DIR;
   
-  if (spd > 0) {
+  if (speed > 0) {
     digitalWrite(LEFT_IN1, HIGH);
     digitalWrite(LEFT_IN2, LOW);
-    digitalWrite(LEFT_IN3, HIGH);
-    digitalWrite(LEFT_IN4, LOW);
-    analogWrite(LEFT_ENA, abs(spd));
-    analogWrite(LEFT_ENB, abs(spd));
-  } else if (spd < 0) {
+    analogWrite(LEFT_PWM, abs(speed));
+  } else if (speed < 0) {
     digitalWrite(LEFT_IN1, LOW);
     digitalWrite(LEFT_IN2, HIGH);
-    digitalWrite(LEFT_IN3, LOW);
-    digitalWrite(LEFT_IN4, HIGH);
-    analogWrite(LEFT_ENA, abs(spd));
-    analogWrite(LEFT_ENB, abs(spd));
+    analogWrite(LEFT_PWM, abs(speed));
   } else {
     digitalWrite(LEFT_IN1, LOW);
     digitalWrite(LEFT_IN2, LOW);
-    digitalWrite(LEFT_IN3, LOW);
-    digitalWrite(LEFT_IN4, LOW);
-    analogWrite(LEFT_ENA, 0);
-    analogWrite(LEFT_ENB, 0);
+    analogWrite(LEFT_PWM, 0);
   }
 }
 
-void setRightMotors(int spd) {
-  spd = constrain(spd, -255, 255) * RIGHT_MOTOR_DIR;
+void setRightMotor(int speed) {
+  // Kalibrasyon faktörü uygula
+  speed = (int)(speed * RIGHT_SPEED_FACTOR);
+  speed = constrain(speed, -255, 255) * RIGHT_MOTOR_DIR;
   
-  if (spd > 0) {
+  if (speed > 0) {
     digitalWrite(RIGHT_IN1, HIGH);
     digitalWrite(RIGHT_IN2, LOW);
-    digitalWrite(RIGHT_IN3, HIGH);
-    digitalWrite(RIGHT_IN4, LOW);
-    analogWrite(RIGHT_ENA, abs(spd));
-    analogWrite(RIGHT_ENB, abs(spd));
-  } else if (spd < 0) {
+    analogWrite(RIGHT_PWM, abs(speed));
+  } else if (speed < 0) {
     digitalWrite(RIGHT_IN1, LOW);
     digitalWrite(RIGHT_IN2, HIGH);
-    digitalWrite(RIGHT_IN3, LOW);
-    digitalWrite(RIGHT_IN4, HIGH);
-    analogWrite(RIGHT_ENA, abs(spd));
-    analogWrite(RIGHT_ENB, abs(spd));
+    analogWrite(RIGHT_PWM, abs(speed));
   } else {
     digitalWrite(RIGHT_IN1, LOW);
     digitalWrite(RIGHT_IN2, LOW);
-    digitalWrite(RIGHT_IN3, LOW);
-    digitalWrite(RIGHT_IN4, LOW);
-    analogWrite(RIGHT_ENA, 0);
-    analogWrite(RIGHT_ENB, 0);
+    analogWrite(RIGHT_PWM, 0);
   }
 }
 
 void stopMotors() {
-  setLeftMotors(0);
-  setRightMotors(0);
+  setLeftMotor(0);
+  setRightMotor(0);
 }
 
+// ============================================
+// ENKODER INTERRUPT HANDLER
+// ============================================
 ISR(PCINT1_vect) {
-  uint8_t currLA = digitalRead(LEFT_ENCODER_A);
+  // Sol enkoder (A1)
+  uint8_t currLA = digitalRead(LEFT_ENC_A);
   if (currLA != prevLeftA) {
-    uint8_t leftB = digitalRead(LEFT_ENCODER_B);
+    uint8_t leftB = digitalRead(LEFT_ENC_B);
     leftEncoderCount += ((currLA == leftB) ? 1 : -1) * LEFT_ENCODER_DIR;
     prevLeftA = currLA;
   }
   
-  uint8_t currRA = digitalRead(RIGHT_ENCODER_A);
+  // Sağ enkoder (A2)
+  uint8_t currRA = digitalRead(RIGHT_ENC_A);
   if (currRA != prevRightA) {
-    uint8_t rightB = digitalRead(RIGHT_ENCODER_B);
+    uint8_t rightB = digitalRead(RIGHT_ENC_B);
     rightEncoderCount += ((currRA == rightB) ? 1 : -1) * RIGHT_ENCODER_DIR;
     prevRightA = currRA;
   }

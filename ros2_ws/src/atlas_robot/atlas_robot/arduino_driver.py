@@ -66,13 +66,13 @@ class ArduinoDriver(Node):
         if abs(linear) < 0.01 and abs(angular) > 0.01:
             # Sadece dönüş - tank modu
             # Angular hızı direkt PWM'e çevir
-            rotation_speed = angular * 100  # rad/s -> PWM faktörü
+            rotation_speed = angular * 200  # rad/s -> PWM faktörü
             
             left_pwm = -int(rotation_speed)  # Sol geri
             right_pwm = int(rotation_speed)  # Sağ ileri
             
             # Limit
-            max_pwm = 180
+            max_pwm = 200
             min_pwm = 100
             
             left_pwm = max(-max_pwm, min(max_pwm, left_pwm))

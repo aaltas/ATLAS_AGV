@@ -1,0 +1,34 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#define LEFT_PWM 10
+#define LEFT_IN1 9
+#define LEFT_IN2 8
+#define RIGHT_PWM 11
+#define RIGHT_IN1 13
+#define RIGHT_IN2 12
+
+#define LEFT_ENC_A A1
+#define LEFT_ENC_B A0
+#define RIGHT_ENC_A A2
+#define RIGHT_ENC_B A3
+
+#define WHEEL_DIAMETER 0.080
+#define WHEEL_RADIUS 0.040
+#define WHEEL_BASE 0.21
+#define ENCODER_CPR 378
+
+#define WHEEL_CIRCUMFERENCE (2.0 * PI * WHEEL_RADIUS)
+#define METERS_PER_COUNT (WHEEL_CIRCUMFERENCE / ENCODER_CPR)
+
+#define MIN_PWM 50
+#define MAX_PWM 180
+#define MAX_LINEAR_SPEED 0.5
+#define MAX_ANGULAR_SPEED 2.0
+
+#define SERIAL_BAUD 115200
+#define SERIAL_TIMEOUT 100
+#define CMD_TIMEOUT_MS 200
+#define ODOM_PUBLISH_RATE_HZ 20
+
+#endif

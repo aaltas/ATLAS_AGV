@@ -1,114 +1,122 @@
 /**
- * Atlas AGV - Motor Controller
- * ROS 2 Serial Communication
+ * ATLAS AGV - MOTOR CONTROLLER (2 Motor + 1 Caster Wheel)
  * 
- * Serial Protocol:
- * Arduino -> Jetson: ODO,x,y,theta,vl,vr,encL,encR
- * Jetson -> Arduino: CMD,left_speed,right_speed
+ * ROS 2 Compatible Serial Protocol
+ * Pin Configuration: Updated for 2-motor differential drive
  */
 
 // ============================================
-// PIN DEFINITIONS
+// PIN TANIMLARI
 // ============================================
-const int LEFT_ENA = 5;
-const int LEFT_IN1 = 4;
-const int LEFT_IN2 = 12;
-const int LEFT_IN3 = 3;
-const int LEFT_IN4 = 2;
-const int LEFT_ENB = 6;
-
-const int RIGHT_ENA = 10;
-const int RIGHT_IN1 = 7;
-const int RIGHT_IN2 = 9;
-const int RIGHT_IN3 = 8;
-const int RIGHT_IN4 = 13;
-const int RIGHT_ENB = 11;
-
-const int LEFT_ENCODER_A = A0;
-const int LEFT_ENCODER_B = A1;
-const int RIGHT_ENCODER_A = A2;
-const int RIGHT_ENCODER_B = A3;
+#define LEFT_PWM 10
+#define LEFT_IN1 8
+#define LEFT_IN2 9
+#define RIGHT_PWM 11
+#define RIGHT_IN1 12
+#define RIGHT_IN2 13
+#define LEFT_ENC_A A1
+#define LEFT_ENC_B A0
+#define RIGHT_ENC_A A2
+#define RIGHT_ENC_B A3
 
 // ============================================
-// CALIBRATED PARAMETERS
+// KALİBRE EDİLMİŞ PARAMETRELER
 // ============================================
-const float COUNTS_PER_WHEEL_REV = 378.0;
-const float WHEEL_DIAMETER = 0.080;
+const float COUNTS_PER_WHEEL_REV = 435.0;  // Ölçülen gerçek değer
+
+// Tekerlek parametreleri
+const float WHEEL_DIAMETER = 0.080;  // 80mm
 const float WHEEL_CIRCUMFERENCE = PI * WHEEL_DIAMETER;
-const float METERS_PER_COUNT = WHEEL_CIRCUMFERENCE / COUNTS_PER_WHEEL_REV;
-const float WHEEL_BASE = 0.21;
+const float METERS_PER_COUNT = WHEEL_CIRCUMFERENCE / COUNTS_PER_WHEEL_REV;  // ~0.000578 m/count
+const float WHEEL_BASE = 0.21;  // 210mm (kalibre edilmiş)
 
-// Direction corrections
-const int LEFT_ENCODER_DIR = -1;
+// Motor kalibrasyon faktörleri (düz gidiş için)
+const float LEFT_SPEED_FACTOR = 1.0;
+const float RIGHT_SPEED_FACTOR = 1.07;  // Sağ motor hafif hızlandırıldı
+
+// Hız limitleri
+const int MAX_PWM = 100;         // Güç kaynağı limiti
+const int MIN_PWM = 70;          // Minimum hareket eşiği
+const float MAX_LINEAR_SPEED = 0.5;   // m/s
+const float MAX_ANGULAR_SPEED = 2.0;  // rad/s
+
+// Enkoder ve motor yön düzeltmeleri (kalibre edilmiş)
+const int LEFT_ENCODER_DIR = 1;
 const int RIGHT_ENCODER_DIR = 1;
 const int LEFT_MOTOR_DIR = -1;
 const int RIGHT_MOTOR_DIR = -1;
 
+// Serial protokol
+const unsigned long UPDATE_INTERVAL = 50;  // 20Hz odometry
+const unsigned long CMD_TIMEOUT = 500;     // 200ms timeout
+
 // ============================================
-// GLOBAL VARIABLES
+// GLOBAL DEĞİŞKENLER
 // ============================================
+// Enkoder sayaçları
 volatile long leftEncoderCount = 0;
 volatile long rightEncoderCount = 0;
 volatile uint8_t prevLeftA = 0;
 volatile uint8_t prevRightA = 0;
 
-long prevLeftCount = 0;
-long prevRightCount = 0;
-
-unsigned long prevTime = 0;
-const unsigned long UPDATE_INTERVAL = 50; // 20Hz
-
+// Odometri değişkenleri
 float robotX = 0.0;
 float robotY = 0.0;
 float robotTheta = 0.0;
-float leftWheelVelocity = 0.0;
-float rightWheelVelocity = 0.0;
+long prevLeftCount = 0;
+long prevRightCount = 0;
+float leftWheelVel = 0.0;
+float rightWheelVel = 0.0;
 
+// Motor durumu
 int currentLeftSpeed = 0;
 int currentRightSpeed = 0;
 
+// Zamanlama
+unsigned long prevTime = 0;
+unsigned long lastCmdTime = 0;
+
+// Serial buffer
 String inputString = "";
-boolean stringComplete = false;
+bool stringComplete = false;
 
 // ============================================
 // SETUP
 // ============================================
 void setup() {
   Serial.begin(115200);
-  while (!Serial);
+  while (!Serial) delay(10);
   
-  // Motor pins
-  pinMode(LEFT_ENA, OUTPUT);
+  // Motor pinleri
+  pinMode(LEFT_PWM, OUTPUT);
   pinMode(LEFT_IN1, OUTPUT);
   pinMode(LEFT_IN2, OUTPUT);
-  pinMode(LEFT_IN3, OUTPUT);
-  pinMode(LEFT_IN4, OUTPUT);
-  pinMode(LEFT_ENB, OUTPUT);
-  pinMode(RIGHT_ENA, OUTPUT);
+  pinMode(RIGHT_PWM, OUTPUT);
   pinMode(RIGHT_IN1, OUTPUT);
   pinMode(RIGHT_IN2, OUTPUT);
-  pinMode(RIGHT_IN3, OUTPUT);
-  pinMode(RIGHT_IN4, OUTPUT);
-  pinMode(RIGHT_ENB, OUTPUT);
   
-  // Encoder pins
-  pinMode(LEFT_ENCODER_A, INPUT_PULLUP);
-  pinMode(LEFT_ENCODER_B, INPUT_PULLUP);
-  pinMode(RIGHT_ENCODER_A, INPUT_PULLUP);
-  pinMode(RIGHT_ENCODER_B, INPUT_PULLUP);
+  // Enkoder pinleri
+  pinMode(LEFT_ENC_A, INPUT_PULLUP);
+  pinMode(LEFT_ENC_B, INPUT_PULLUP);
+  pinMode(RIGHT_ENC_A, INPUT_PULLUP);
+  pinMode(RIGHT_ENC_B, INPUT_PULLUP);
   
-  // Pin Change Interrupt
-  PCICR |= (1 << PCIE1);
-  PCMSK1 |= (1 << PCINT8);
-  PCMSK1 |= (1 << PCINT10);
+  // Pin Change Interrupt setup
+  PCICR |= (1 << PCIE1);      // PCINT1 grubunu etkinleştir
+  PCMSK1 |= (1 << PCINT9);    // A1 (LEFT_ENC_A)
+  PCMSK1 |= (1 << PCINT10);   // A2 (RIGHT_ENC_A)
   
-  prevLeftA = digitalRead(LEFT_ENCODER_A);
-  prevRightA = digitalRead(RIGHT_ENCODER_A);
+  prevLeftA = digitalRead(LEFT_ENC_A);
+  prevRightA = digitalRead(RIGHT_ENC_A);
   
   stopMotors();
   
-  Serial.println("READY");
+  inputString.reserve(64);
   prevTime = millis();
+  lastCmdTime = millis();
+  
+  delay(1000);
+  Serial.println(F("READY"));
 }
 
 // ============================================
@@ -117,7 +125,7 @@ void setup() {
 void loop() {
   unsigned long currentTime = millis();
   
-  // Odometry update and publish at 20Hz
+  // 20Hz odometry update
   if (currentTime - prevTime >= UPDATE_INTERVAL) {
     float deltaTime = (currentTime - prevTime) / 1000.0;
     updateOdometry(deltaTime);
@@ -125,7 +133,14 @@ void loop() {
     prevTime = currentTime;
   }
   
-  // Handle serial commands
+  // Command timeout (safety)
+  if (currentTime - lastCmdTime > CMD_TIMEOUT) {
+    if (currentLeftSpeed != 0 || currentRightSpeed != 0) {
+      stopMotors();
+    }
+  }
+  
+  // Serial komut işleme
   if (stringComplete) {
     parseCommand(inputString);
     inputString = "";
@@ -148,92 +163,100 @@ void serialEvent() {
 }
 
 // ============================================
-// COMMAND PARSER
+// KOMUT İŞLEME
 // ============================================
 void parseCommand(String cmd) {
   cmd.trim();
   
-  if (cmd.startsWith("CMD,")) {
-    // CMD,left_speed,right_speed
-    int firstComma = cmd.indexOf(',');
-    int secondComma = cmd.indexOf(',', firstComma + 1);
-    
-    if (secondComma > 0) {
-      int leftSpeed = cmd.substring(firstComma + 1, secondComma).toInt();
-      int rightSpeed = cmd.substring(secondComma + 1).toInt();
-      
-      setLeftMotors(leftSpeed);
-      setRightMotors(rightSpeed);
+  if (cmd.startsWith(F("CMD,"))) {
+    // CMD,left_pwm,right_pwm
+    int comma = cmd.indexOf(',', 4);
+    if (comma > 0) {
+      int leftPWM = cmd.substring(4, comma).toInt();
+      int rightPWM = cmd.substring(comma + 1).toInt();
+      setMotors(leftPWM, rightPWM);
+      lastCmdTime = millis();
     }
   }
-  else if (cmd == "STOP") {
+  else if (cmd == F("STOP")) {
     stopMotors();
+    Serial.println(F("ACK"));
   }
-  else if (cmd == "RESET") {
-    resetOdometry();
+  else if (cmd == F("RESET")) {
+    resetOdom();
+    Serial.println(F("ACK"));
   }
-  else if (cmd == "STATUS") {
-    Serial.print("STATUS,");
+  else if (cmd == F("STATUS")) {
+    Serial.print(F("STATUS,"));
     Serial.print(currentLeftSpeed);
-    Serial.print(",");
+    Serial.print(F(","));
     Serial.println(currentRightSpeed);
   }
 }
 
 // ============================================
-// ODOMETRY
+// ODOMETRY FONKSIYONLARI
 // ============================================
 void updateOdometry(float deltaTime) {
+  // Atomic enkoder okuma
   noInterrupts();
   long leftCount = leftEncoderCount;
   long rightCount = rightEncoderCount;
   interrupts();
   
+  // Delta hesapla
   long leftDelta = leftCount - prevLeftCount;
   long rightDelta = rightCount - prevRightCount;
   
+  // Mesafeye çevir
   float leftDistance = leftDelta * METERS_PER_COUNT;
   float rightDistance = rightDelta * METERS_PER_COUNT;
   
+  // Hız hesapla
+  if (deltaTime > 0) {
+    leftWheelVel = leftDistance / deltaTime;
+    rightWheelVel = rightDistance / deltaTime;
+  }
+  
+  // Differential drive kinematics
   float centerDistance = (leftDistance + rightDistance) / 2.0;
   float deltaTheta = (rightDistance - leftDistance) / WHEEL_BASE;
   
+  // Pozisyon güncelle
   robotX += centerDistance * cos(robotTheta + deltaTheta / 2.0);
   robotY += centerDistance * sin(robotTheta + deltaTheta / 2.0);
   robotTheta += deltaTheta;
   
-  // Normalize angle
-  while (robotTheta > PI) robotTheta -= 2 * PI;
-  while (robotTheta < -PI) robotTheta += 2 * PI;
-  
-  // Calculate velocities
-  if (deltaTime > 0) {
-    leftWheelVelocity = leftDistance / deltaTime;
-    rightWheelVelocity = rightDistance / deltaTime;
-  }
+  // Açıyı normalize et (-π ile +π arası)
+  while (robotTheta > PI) robotTheta -= 2.0 * PI;
+  while (robotTheta < -PI) robotTheta += 2.0 * PI;
   
   prevLeftCount = leftCount;
   prevRightCount = rightCount;
 }
 
 void publishOdometry() {
-  Serial.print("ODO,");
+  // Format: ODO,x,y,theta,vl,vr,encL,encR
+  Serial.print(F("ODO,"));
   Serial.print(robotX, 4);
-  Serial.print(",");
+  Serial.print(F(","));
   Serial.print(robotY, 4);
-  Serial.print(",");
+  Serial.print(F(","));
   Serial.print(robotTheta, 4);
-  Serial.print(",");
-  Serial.print(leftWheelVelocity, 4);
-  Serial.print(",");
-  Serial.print(rightWheelVelocity, 4);
-  Serial.print(",");
+  Serial.print(F(","));
+  Serial.print(leftWheelVel, 4);
+  Serial.print(F(","));
+  Serial.print(rightWheelVel, 4);
+  Serial.print(F(","));
+  
+  noInterrupts();
   Serial.print(leftEncoderCount);
-  Serial.print(",");
+  Serial.print(F(","));
   Serial.println(rightEncoderCount);
+  interrupts();
 }
 
-void resetOdometry() {
+void resetOdom() {
   noInterrupts();
   leftEncoderCount = 0;
   rightEncoderCount = 0;
@@ -244,90 +267,99 @@ void resetOdometry() {
   robotX = 0.0;
   robotY = 0.0;
   robotTheta = 0.0;
-  
-  Serial.println("ACK");
+  leftWheelVel = 0.0;
+  rightWheelVel = 0.0;
 }
 
 // ============================================
-// MOTOR CONTROL
+// MOTOR KONTROL FONKSİYONLARI
 // ============================================
-void setLeftMotors(int speed) {
-  speed = constrain(speed, -255, 255);
+void setMotors(int leftPWM, int rightPWM) {
+  // Kalibrasyon faktörü uygula
+  leftPWM = (int)(leftPWM * LEFT_SPEED_FACTOR);
+  rightPWM = (int)(rightPWM * RIGHT_SPEED_FACTOR);
+  
+  // Limit uygula
+  leftPWM = constrain(leftPWM, -MAX_PWM, MAX_PWM);
+  rightPWM = constrain(rightPWM, -MAX_PWM, MAX_PWM);
+  
+  // Minimum eşik kontrolü
+  if (abs(leftPWM) > 0 && abs(leftPWM) < MIN_PWM) {
+    leftPWM = (leftPWM > 0) ? MIN_PWM : -MIN_PWM;
+  }
+  if (abs(rightPWM) > 0 && abs(rightPWM) < MIN_PWM) {
+    rightPWM = (rightPWM > 0) ? MIN_PWM : -MIN_PWM;
+  }
+  
+  setLeftMotor(leftPWM);
+  setRightMotor(rightPWM);
+}
+
+void setLeftMotor(int speed) {
   currentLeftSpeed = speed;
-  speed *= LEFT_MOTOR_DIR;
+  speed *= LEFT_MOTOR_DIR;  // Yön düzeltmesi
   
   if (speed > 0) {
     digitalWrite(LEFT_IN1, HIGH);
     digitalWrite(LEFT_IN2, LOW);
-    digitalWrite(LEFT_IN3, HIGH);
-    digitalWrite(LEFT_IN4, LOW);
-    analogWrite(LEFT_ENA, abs(speed));
-    analogWrite(LEFT_ENB, abs(speed));
-  } else if (speed < 0) {
+    analogWrite(LEFT_PWM, abs(speed));
+  } 
+  else if (speed < 0) {
     digitalWrite(LEFT_IN1, LOW);
     digitalWrite(LEFT_IN2, HIGH);
-    digitalWrite(LEFT_IN3, LOW);
-    digitalWrite(LEFT_IN4, HIGH);
-    analogWrite(LEFT_ENA, abs(speed));
-    analogWrite(LEFT_ENB, abs(speed));
-  } else {
+    analogWrite(LEFT_PWM, abs(speed));
+  } 
+  else {
     digitalWrite(LEFT_IN1, LOW);
     digitalWrite(LEFT_IN2, LOW);
-    digitalWrite(LEFT_IN3, LOW);
-    digitalWrite(LEFT_IN4, LOW);
-    analogWrite(LEFT_ENA, 0);
-    analogWrite(LEFT_ENB, 0);
+    analogWrite(LEFT_PWM, 0);
   }
 }
 
-void setRightMotors(int speed) {
-  speed = constrain(speed, -255, 255);
+void setRightMotor(int speed) {
   currentRightSpeed = speed;
-  speed *= RIGHT_MOTOR_DIR;
+  speed *= RIGHT_MOTOR_DIR;  // Yön düzeltmesi
   
   if (speed > 0) {
     digitalWrite(RIGHT_IN1, HIGH);
     digitalWrite(RIGHT_IN2, LOW);
-    digitalWrite(RIGHT_IN3, HIGH);
-    digitalWrite(RIGHT_IN4, LOW);
-    analogWrite(RIGHT_ENA, abs(speed));
-    analogWrite(RIGHT_ENB, abs(speed));
-  } else if (speed < 0) {
+    analogWrite(RIGHT_PWM, abs(speed));
+  } 
+  else if (speed < 0) {
     digitalWrite(RIGHT_IN1, LOW);
     digitalWrite(RIGHT_IN2, HIGH);
-    digitalWrite(RIGHT_IN3, LOW);
-    digitalWrite(RIGHT_IN4, HIGH);
-    analogWrite(RIGHT_ENA, abs(speed));
-    analogWrite(RIGHT_ENB, abs(speed));
-  } else {
+    analogWrite(RIGHT_PWM, abs(speed));
+  } 
+  else {
     digitalWrite(RIGHT_IN1, LOW);
     digitalWrite(RIGHT_IN2, LOW);
-    digitalWrite(RIGHT_IN3, LOW);
-    digitalWrite(RIGHT_IN4, LOW);
-    analogWrite(RIGHT_ENA, 0);
-    analogWrite(RIGHT_ENB, 0);
+    analogWrite(RIGHT_PWM, 0);
   }
 }
 
 void stopMotors() {
-  setLeftMotors(0);
-  setRightMotors(0);
+  setLeftMotor(0);
+  setRightMotor(0);
+  currentLeftSpeed = 0;
+  currentRightSpeed = 0;
 }
 
 // ============================================
-// ENCODER INTERRUPT
+// ENKODER INTERRUPT HANDLER
 // ============================================
 ISR(PCINT1_vect) {
-  uint8_t currLA = digitalRead(LEFT_ENCODER_A);
+  // Sol enkoder (A1)
+  uint8_t currLA = digitalRead(LEFT_ENC_A);
   if (currLA != prevLeftA) {
-    uint8_t leftB = digitalRead(LEFT_ENCODER_B);
+    uint8_t leftB = digitalRead(LEFT_ENC_B);
     leftEncoderCount += ((currLA == leftB) ? 1 : -1) * LEFT_ENCODER_DIR;
     prevLeftA = currLA;
   }
   
-  uint8_t currRA = digitalRead(RIGHT_ENCODER_A);
+  // Sağ enkoder (A2)
+  uint8_t currRA = digitalRead(RIGHT_ENC_A);
   if (currRA != prevRightA) {
-    uint8_t rightB = digitalRead(RIGHT_ENCODER_B);
+    uint8_t rightB = digitalRead(RIGHT_ENC_B);
     rightEncoderCount += ((currRA == rightB) ? 1 : -1) * RIGHT_ENCODER_DIR;
     prevRightA = currRA;
   }
