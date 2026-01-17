@@ -24,9 +24,11 @@ setup(
     license='MIT',
     tests_require=['pytest'],
     entry_points={
-        'console_scripts': [
-            'arduino_driver = atlas_robot.arduino_driver:main',
-            'teleop_keyboard = atlas_robot.teleop_keyboard:main',
+    'console_scripts': [
+        'arduino_driver = atlas_robot.arduino_driver:main',
+        'teleop_keyboard = atlas_robot.teleop_keyboard:main',
+        'rplidar_node = atlas_robot.rplidar_node:main',
+        #                           ^^^^^^^^^^^^^ Dosya adı
         ],
     },
 )
